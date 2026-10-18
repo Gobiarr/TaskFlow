@@ -1,0 +1,355 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0b0c12">
+    <title>TaskFlow — твой прогресс</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="/static/js/app.js" defer></script>
+</head>
+<body>
+<div class="app-container">
+    <div class="screen-viewport">
+
+        <!-- ЗАДАЧИ -->
+        <section class="app-screen active" id="tasks-screen">
+            <div class="screen-scroll">
+                <header class="topbar">
+                    <div class="brand">
+                        <div class="brand-icon">✦</div>
+                        <span>TaskFlow</span>
+                    </div>
+                    <span class="level-badge">⭐ Уровень 1</span>
+                </header>
+
+                <section class="welcome-block">
+                    <p class="eyebrow">ТВОЁ ПРОСТРАНСТВО</p>
+                    <h1>Привет, герой<span class="accent">.</span></h1>
+                    <p>Маленькие шаги приводят к большим результатам.</p>
+                </section>
+
+                <section class="xp-card">
+                    <div class="xp-card-top">
+                        <div>
+                            <p class="muted-label">ТВОЙ ПРОГРЕСС</p>
+                            <h2>Уровень 1</h2>
+                        </div>
+                        <div class="xp-symbol">⚡</div>
+                    </div>
+                    <div class="xp-track">
+                        <div id="xp-progress" class="xp-fill"></div>
+                    </div>
+                    <div class="xp-card-bottom">
+                        <span class="xp-value">0 / 100 XP</span>
+                        <span class="xp-caption">Продолжай в том же духе</span>
+                    </div>
+                </section>
+
+                <section class="stats-grid">
+                    <article class="stat-card">
+                        <span class="stat-icon">◈</span>
+                        <span class="stat-number" id="total-count">0</span>
+                        <span class="stat-label">Всего задач</span>
+                    </article>
+                    <article class="stat-card">
+                        <span class="stat-icon green">✓</span>
+                        <span class="stat-number" id="completed-count">0</span>
+                        <span class="stat-label">Выполнено</span>
+                    </article>
+                </section>
+
+                <section class="tasks-section">
+                    <div class="section-heading">
+                        <div>
+                            <p class="eyebrow">ТВОЙ ПЛАН</p>
+                            <h2>Мои задачи</h2>
+                        </div>
+                        <button class="primary-button" id="create-task" type="button">
+                            + Создать
+                        </button>
+                    </div>
+
+                    <form id="task-form" class="task-form" hidden>
+                        <label for="task-title">Название задачи</label>
+                        <input id="task-title" name="title" type="text"
+                               maxlength="120" placeholder="Например, изучить Python" required>
+
+                        <label for="task-description">Описание</label>
+                        <textarea id="task-description" name="description"
+                                  maxlength="500" rows="3"
+                                  placeholder="Добавь немного деталей..."></textarea>
+
+                        <div class="form-actions">
+                            <button class="secondary-button" id="cancel-task" type="button">
+                                Отмена
+                            </button>
+                            <button class="primary-button" id="save-task" type="submit">
+                                Сохранить
+                            </button>
+                        </div>
+                    </form>
+
+                    <p id="error-message" class="error-message" hidden></p>
+                    <div id="task-list" class="task-list"></div>
+                </section>
+            </div>
+        </section>
+
+        <!-- ПРИВЫЧКИ -->
+        <section class="app-screen habits-screen" id="habits-screen"
+                 aria-label="Привычки" aria-hidden="true" inert>
+            <div class="screen-scroll">
+                <header class="topbar">
+                    <div class="brand">
+                        <div class="brand-icon habit-brand-icon">🌱</div>
+                        <span>Мои привычки</span>
+                    </div>
+                    <span class="level-badge">+5 XP за день</span>
+                </header>
+
+                <section class="habits-hero">
+                    <div class="habit-hero-icon">🌿</div>
+                    <p class="eyebrow">МАЛЕНЬКИЕ ШАГИ — БОЛЬШИЕ ПЕРЕМЕНЫ</p>
+                    <h1>Стань лучше<span class="accent">.</span></h1>
+                    <p>Регулярность важнее идеальности. Сделай сегодня что-то для себя.</p>
+                </section>
+
+                <section class="habit-overview">
+                    <div>
+                        <span class="overview-label">Мои привычки</span>
+                        <strong id="habit-total">0</strong>
+                    </div>
+                    <div>
+                        <span class="overview-label">Выполнено сегодня</span>
+                        <strong id="habit-done">0</strong>
+                    </div>
+                    <div>
+                        <span class="overview-label">Всего выполнений</span>
+                        <strong id="habit-completions">0</strong>
+                    </div>
+                </section>
+
+                <section class="habits-section">
+                    <div class="section-heading">
+                        <div>
+                            <p class="eyebrow">ТВОЙ РОСТ</p>
+                            <h2>Ежедневные привычки</h2>
+                        </div>
+                        <button class="primary-button" id="create-habit" type="button">
+                            + Создать
+                        </button>
+                    </div>
+
+                    <form id="habit-form" class="task-form" hidden>
+                        <label for="habit-title">Название привычки</label>
+                        <input id="habit-title" name="title" type="text"
+                               maxlength="120" placeholder="Например, читать 20 минут" required>
+
+                        <label for="habit-description">Описание</label>
+                        <textarea id="habit-description" name="description"
+                                  maxlength="500" rows="3"
+                                  placeholder="Какую привычку хочешь развить?"></textarea>
+
+                        <div class="form-actions">
+                            <button class="secondary-button" id="cancel-habit" type="button">
+                                Отмена
+                            </button>
+                            <button class="primary-button" id="save-habit" type="submit">
+                                Создать привычку
+                            </button>
+                        </div>
+                    </form>
+
+                    <p id="habit-error" class="error-message" hidden></p>
+                    <div id="habits-list" class="habits-list"></div>
+                </section>
+
+                <div class="habits-footer">
+                    <span>✦</span>
+                    <p>Не стремись к идеалу. Стремись к постоянству.</p>
+                    <span>✦</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- НАГРАДЫ -->
+        <section class="app-screen rewards-screen" id="achievements-screen"
+                 aria-label="Достижения" aria-hidden="true" inert>
+            <div class="screen-scroll rewards-scroll">
+                <header class="rewards-topbar">
+                    <div class="rewards-brand">
+                        <span class="rewards-brand-icon">✧</span>
+                        <span>HALL OF FAME</span>
+                    </div>
+                    <span class="collection-tag">ТВОЯ КОЛЛЕКЦИЯ</span>
+                </header>
+
+                <section class="rewards-hero">
+                    <div class="hero-orb orb-one"></div>
+                    <div class="hero-orb orb-two"></div>
+                    <div class="trophy-scene">
+                        <div class="trophy-glow"></div>
+                        <div class="trophy">🏆</div>
+                        <span class="spark spark-one">✦</span>
+                        <span class="spark spark-two">✧</span>
+                        <span class="spark spark-three">✦</span>
+                    </div>
+                    <p class="eyebrow rewards-eyebrow">КАЖДЫЙ ШАГ ИМЕЕТ ЗНАЧЕНИЕ</p>
+                    <h1>Зал <span>славы</span></h1>
+                    <p class="rewards-description">
+                        Твои усилия превращаются в достижения. Собери их все.
+                    </p>
+                </section>
+
+                <section class="collection-panel">
+                    <div class="collection-heading">
+                        <div>
+                            <p class="muted-label">ТВОЯ КОЛЛЕКЦИЯ</p>
+                            <h2>Путь героя</h2>
+                        </div>
+                        <div class="collection-count" id="achievement-counter">0 / 0</div>
+                    </div>
+                    <div class="collection-track">
+                        <div id="achievement-progress" class="collection-fill"></div>
+                    </div>
+                    <div class="collection-footer">
+                        <span>Открытые награды</span>
+                        <span>Каждая цель приближает тебя к вершине</span>
+                    </div>
+                </section>
+
+                <section class="rewards-list-section">
+                    <div class="rewards-section-heading">
+                        <div>
+                            <p class="eyebrow">ТВОИ ДОСТИЖЕНИЯ</p>
+                            <h2>Коллекция наград</h2>
+                        </div>
+                        <span class="tiny-star">✦</span>
+                    </div>
+
+                    <div class="rewards-summary">
+                        <div class="summary-icon">✧</div>
+                        <div>
+                            <h3 id="achievement-summary-title">Начни свой путь!</h3>
+                            <p id="achievement-summary-text">
+                                Выполняй задачи и открывай новые награды.
+                            </p>
+                        </div>
+                    </div>
+
+                    <p id="achievement-error" class="error-message" hidden></p>
+                    <div id="achievements-list" class="achievements-grid"></div>
+                </section>
+
+                <div class="rewards-footer">
+                    <span>✦</span>
+                    <p>Твоя история только начинается</p>
+                    <span>✦</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ПРОФИЛЬ -->
+        <section class="app-screen profile-screen" id="profile-screen"
+                 aria-label="Профиль" aria-hidden="true" inert>
+            <div class="screen-scroll">
+                <header class="topbar">
+                    <div class="brand">
+                        <div class="brand-icon">◉</div>
+                        <span>Мой профиль</span>
+                    </div>
+                    <span class="level-badge" id="profile-level-badge">⭐ Уровень 1</span>
+                </header>
+
+                <section class="profile-hero">
+                    <div class="profile-avatar">🧑‍🚀</div>
+                    <p class="eyebrow">ТВОЙ ПУТЬ К ЦЕЛЯМ</p>
+                    <h1>Герой TaskFlow<span class="accent">.</span></h1>
+                    <p>Каждый день — возможность стать лучше.</p>
+                </section>
+
+                <section class="profile-stats">
+                    <article class="profile-stat">
+                        <span>⚡</span>
+                        <strong id="profile-xp">0 XP</strong>
+                        <small>Опыт</small>
+                    </article>
+                    <article class="profile-stat">
+                        <span>✓</span>
+                        <strong id="profile-tasks">0</strong>
+                        <small>Выполнено задач</small>
+                    </article>
+                    <article class="profile-stat">
+                        <span>🏆</span>
+                        <strong id="profile-achievements">0</strong>
+                        <small>Наград открыто</small>
+                    </article>
+                </section>
+
+                <section class="collection-panel profile-progress-panel">
+                    <p class="muted-label">ТЕКУЩИЙ УРОВЕНЬ</p>
+                    <h2 id="profile-level-title">Уровень 1</h2>
+                    <div class="xp-track">
+                        <div id="profile-xp-progress" class="xp-fill"></div>
+                    </div>
+                    <p class="profile-progress-caption" id="profile-progress-caption">
+                        0 / 100 XP до следующего уровня
+                    </p>
+                </section>
+
+                <p id="profile-error" class="error-message" hidden></p>
+            </div>
+        </section>
+    </div>
+
+    <!-- НИЖНЯЯ НАВИГАЦИЯ -->
+    <nav class="bottom-nav" aria-label="Главная навигация">
+        <button class="nav-item active" data-screen="tasks" type="button" aria-current="page">
+            <span class="nav-icon">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <rect x="4" y="3" width="16" height="18" rx="3"/>
+                    <path d="M8 8h8M8 12h8M8 16h5"/>
+                </svg>
+            </span>
+            <span>Задачи</span>
+        </button>
+
+        <button class="nav-item" data-screen="habits" type="button">
+            <span class="nav-icon">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M12 21V11"/>
+                    <path d="M12 14C5 14 4 9 4 5c5 0 8 2 8 9Z"/>
+                    <path d="M12 11c0-5 3-8 8-8 0 5-2 8-8 8Z"/>
+                </svg>
+            </span>
+            <span>Привычки</span>
+        </button>
+
+        <button class="nav-item" data-screen="achievements" type="button">
+            <span class="nav-icon">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M8 21h8M12 17v4"/>
+                    <path d="M7 4h10v5a5 5 0 0 1-10 0V4Z"/>
+                    <path d="M7 6H4v2a4 4 0 0 0 4 4"/>
+                    <path d="M17 6h3v2a4 4 0 0 1-4 4"/>
+                </svg>
+            </span>
+            <span>Награды</span>
+        </button>
+
+        <button class="nav-item" data-screen="profile" type="button">
+            <span class="nav-icon">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="8" r="4"/>
+                    <path d="M4 21a8 8 0 0 1 16 0"/>
+                </svg>
+            </span>
+            <span>Профиль</span>
+        </button>
+    </nav>
+</div>
+</body>
+</html>

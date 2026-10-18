@@ -1,0 +1,9 @@
+```gitignore
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
+.env
+```
