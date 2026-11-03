@@ -15,6 +15,12 @@ const cancelTaskButton = $("#cancel-task");
 const saveTaskButton = $("#save-task");
 const titleInput = $("#task-title");
 const descriptionInput = $("#task-description");
+const categoryInput = $("#task-category");
+const priorityInput = $("#task-priority");
+const deadlineInput = $("#task-deadline");
+const taskStatusFilter = $("#task-status-filter");
+const taskSort = $("#task-sort");
+const taskCategoryFilter = $("#task-category-filter");
 const totalCount = $("#total-count");
 const completedCount = $("#completed-count");
 const errorMessage = $("#error-message");
@@ -67,12 +73,17 @@ let achievements = [];
 let habits = [];
 let activeScreen = "tasks";
 let switchingScreen = false;
+let editingTaskId = null;
+let editingHabitId = null;
 
 async function apiRequest(url, options = {}) {
     const response = await fetch(url, {
         ...options,
         headers: {
             "Content-Type": "application/json",
+            ...(telegram?.initData
+                ? { "X-Telegram-Init-Data": telegram.initData }
+                : {}),
             ...options.headers,
         },
     });
@@ -241,6 +252,43 @@ function createTaskElement(task) {
         content.appendChild(description);
     }
 
+    const metadata = document.createElement("div");
+    metadata.className = "task-metadata";
+
+    const category = document.createElement("span");
+    category.className = "task-category";
+    category.textContent = task.category;
+    metadata.appendChild(category);
+
+    const priority = document.createElement("span");
+    priority.className = `task-priority priority-${task.priority}`;
+    priority.textContent = {
+        low: "Низкий приоритет",
+        medium: "Обычный приоритет",
+        high: "Высокий приоритет",
+    }[task.priority] || task.priority;
+    metadata.appendChild(priority);
+
+    if (task.deadline) {
+        const deadline = document.createElement("span");
+        deadline.className = "task-deadline";
+        deadline.textContent = `До ${new Date(
+            `${task.deadline}T00:00:00`
+        ).toLocaleDateString("ru-RU")}`;
+        metadata.appendChild(deadline);
+    }
+    content.appendChild(metadata);
+
+    const actions = document.createElement("div");
+    actions.className = "task-actions";
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "secondary-button task-edit";
+    editButton.textContent = "Изменить";
+    editButton.setAttribute("aria-label", `Изменить задачу: ${task.title}`);
+    editButton.addEventListener("click", () => openTaskForm(task));
+
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "delete-task";
@@ -263,7 +311,8 @@ function createTaskElement(task) {
         }
     });
 
-    item.append(checkbox, content, deleteButton);
+    actions.append(editButton, deleteButton);
+    item.append(checkbox, content, actions);
 
     return item;
 }
@@ -534,7 +583,16 @@ function renderHabits() {
             }
         });
 
-        top.appendChild(deleteButton);
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "secondary-button habit-edit";
+        editButton.textContent = "Изменить";
+        editButton.addEventListener("click", () => openHabitForm(habit));
+
+        const topActions = document.createElement("div");
+        topActions.className = "habit-card-actions";
+        topActions.append(editButton, deleteButton);
+        top.appendChild(topActions);
 
         const description = document.createElement("p");
         description.className = "habit-description";
@@ -572,6 +630,50 @@ function renderHabits() {
         totalMetric.append(totalEmoji, totalText);
         metrics.append(streakMetric, totalMetric);
 
+        const historyButton = document.createElement("button");
+        historyButton.type = "button";
+        historyButton.className = "secondary-button habit-history-toggle";
+        historyButton.textContent = "История";
+
+        const history = document.createElement("ul");
+        history.className = "habit-history";
+        history.hidden = true;
+        historyButton.addEventListener("click", async () => {
+            if (!history.hidden) {
+                history.hidden = true;
+                return;
+            }
+
+            historyButton.disabled = true;
+            hideError(habitError);
+            try {
+                const records = await apiRequest(
+                    `/api/habits/${habit.id}/history`
+                );
+                history.replaceChildren();
+
+                if (records.length === 0) {
+                    const empty = document.createElement("li");
+                    empty.textContent = "Пока нет выполнений";
+                    history.appendChild(empty);
+                } else {
+                    records.forEach((record) => {
+                        const item = document.createElement("li");
+                        item.textContent = new Date(
+                            `${record.completed_date}T00:00:00`
+                        ).toLocaleDateString("ru-RU");
+                        history.appendChild(item);
+                    });
+                }
+
+                history.hidden = false;
+            } catch (error) {
+                showError(habitError, error.message);
+            } finally {
+                historyButton.disabled = false;
+            }
+        });
+
         const completeButton = document.createElement("button");
         completeButton.type = "button";
         completeButton.className = "habit-complete-button";
@@ -600,7 +702,14 @@ function renderHabits() {
             }
         });
 
-        card.append(top, description, metrics, completeButton);
+        card.append(
+            top,
+            description,
+            metrics,
+            historyButton,
+            history,
+            completeButton,
+        );
         habitList.appendChild(card);
     });
 }
@@ -628,13 +737,20 @@ function pluralizeCompletions(value) {
 }
 
 async function refreshData() {
+    const taskParams = new URLSearchParams({
+        status: taskStatusFilter?.value || "all",
+        sort: taskSort?.value || "newest",
+    });
+    const category = taskCategoryFilter?.value.trim();
+    if (category) taskParams.set("category", category);
+
     const [
         loadedTasks,
         loadedProfile,
         loadedAchievements,
         loadedHabits,
     ] = await Promise.all([
-        apiRequest("/api/tasks"),
+        apiRequest(`/api/tasks?${taskParams}`),
         apiRequest("/api/profile"),
         apiRequest("/api/achievements"),
         apiRequest("/api/habits"),
@@ -802,11 +918,30 @@ function screenOrder(name) {
     return ["tasks", "habits", "achievements", "profile"].indexOf(name);
 }
 
-function openHabitForm() {
+function openTaskForm(task = null) {
+    hideError(errorMessage);
+    if (!taskForm) return;
+
+    editingTaskId = task?.id ?? null;
+    titleInput.value = task?.title ?? "";
+    descriptionInput.value = task?.description ?? "";
+    categoryInput.value = task?.category ?? "Общее";
+    priorityInput.value = task?.priority ?? "medium";
+    deadlineInput.value = task?.deadline ?? "";
+    saveTaskButton.textContent = task ? "Сохранить изменения" : "Сохранить";
+    taskForm.hidden = false;
+    titleInput.focus();
+}
+
+function openHabitForm(habit = null) {
     hideError(habitError);
 
     if (!habitForm) return;
 
+    editingHabitId = habit?.id ?? null;
+    habitTitleInput.value = habit?.title ?? "";
+    habitDescriptionInput.value = habit?.description ?? "";
+    saveHabitButton.textContent = habit ? "Сохранить изменения" : "Создать привычку";
     habitForm.hidden = false;
 
     if (habitTitleInput) {
@@ -815,19 +950,16 @@ function openHabitForm() {
 }
 
 createTaskButton?.addEventListener("click", () => {
-    hideError(errorMessage);
-
     if (!taskForm) return;
 
-    taskForm.hidden = !taskForm.hidden;
-
-    if (!taskForm.hidden && titleInput) {
-        titleInput.focus();
-    }
+    if (taskForm.hidden) openTaskForm();
+    else taskForm.hidden = true;
 });
 
 cancelTaskButton?.addEventListener("click", () => {
     taskForm?.reset();
+    editingTaskId = null;
+    if (saveTaskButton) saveTaskButton.textContent = "Сохранить";
 
     if (taskForm) {
         taskForm.hidden = true;
@@ -852,13 +984,24 @@ taskForm?.addEventListener("submit", async (event) => {
     setButtonLoading(saveTaskButton, true, "Сохраняем...", "Сохранить");
 
     try {
-        await apiRequest("/api/tasks", {
-            method: "POST",
-            body: JSON.stringify({ title, description }),
-        });
+        await apiRequest(
+            editingTaskId ? `/api/tasks/${editingTaskId}` : "/api/tasks",
+            {
+                method: editingTaskId ? "PATCH" : "POST",
+                body: JSON.stringify({
+                    title,
+                    description,
+                    category: categoryInput.value.trim(),
+                    priority: priorityInput.value,
+                    deadline: deadlineInput.value || null,
+                }),
+            },
+        );
 
         taskForm.reset();
         taskForm.hidden = true;
+        editingTaskId = null;
+        saveTaskButton.textContent = "Сохранить";
 
         await loadData();
     } catch (error) {
@@ -867,7 +1010,12 @@ taskForm?.addEventListener("submit", async (event) => {
             `Не удалось сохранить задачу: ${error.message}`
         );
     } finally {
-        setButtonLoading(saveTaskButton, false, "Сохраняем...", "Сохранить");
+        setButtonLoading(
+            saveTaskButton,
+            false,
+            "Сохраняем...",
+            editingTaskId ? "Сохранить изменения" : "Сохранить",
+        );
     }
 });
 
@@ -878,11 +1026,14 @@ createHabitButton?.addEventListener("click", () => {
         openHabitForm();
     } else {
         habitForm.hidden = true;
+        editingHabitId = null;
     }
 });
 
 cancelHabitButton?.addEventListener("click", () => {
     habitForm?.reset();
+    editingHabitId = null;
+    if (saveHabitButton) saveHabitButton.textContent = "Создать привычку";
 
     if (habitForm) {
         habitForm.hidden = true;
@@ -912,13 +1063,20 @@ habitForm?.addEventListener("submit", async (event) => {
     );
 
     try {
-        await apiRequest("/api/habits", {
-            method: "POST",
-            body: JSON.stringify({ title, description }),
-        });
+        await apiRequest(
+            editingHabitId
+                ? `/api/habits/${editingHabitId}`
+                : "/api/habits",
+            {
+                method: editingHabitId ? "PATCH" : "POST",
+                body: JSON.stringify({ title, description }),
+            },
+        );
 
         habitForm.reset();
         habitForm.hidden = true;
+        editingHabitId = null;
+        saveHabitButton.textContent = "Создать привычку";
 
         await refreshData();
     } catch (error) {
@@ -931,9 +1089,13 @@ habitForm?.addEventListener("submit", async (event) => {
             saveHabitButton,
             false,
             "Создаём...",
-            "Создать привычку"
+            editingHabitId ? "Сохранить изменения" : "Создать привычку"
         );
     }
+});
+
+[taskStatusFilter, taskSort, taskCategoryFilter].forEach((filter) => {
+    filter?.addEventListener("change", () => loadData());
 });
 
 navItems.forEach((item) => {

@@ -398,7 +398,8 @@ button:disabled {
 }
 
 .task-form input,
-.task-form textarea {
+.task-form textarea,
+.task-form select {
     width: 100%;
     padding: 13px;
     border: 1px solid #ffffff12;
@@ -411,8 +412,33 @@ button:disabled {
 }
 
 .task-form input:focus,
-.task-form textarea:focus {
+.task-form textarea:focus,
+.task-form select:focus {
     border-color: #a78bfa99;
+}
+
+.task-form select,
+.task-filters select,
+.task-filters input {
+    width: 100%;
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid #ffffff12;
+    border-radius: 12px;
+    background: #0c0d14;
+    color: var(--text);
+    font-size: 12px;
+}
+
+.task-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.task-filters input {
+    grid-column: 1 / -1;
 }
 
 .form-actions {
@@ -451,6 +477,49 @@ button:disabled {
 .task-content {
     flex: 1;
     min-width: 0;
+}
+
+.task-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.task-edit {
+    min-height: 29px;
+    padding: 5px 8px;
+    border-radius: 9px;
+    font-size: 10px;
+}
+
+.task-metadata {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 9px;
+}
+
+.task-metadata > span {
+    padding: 5px 7px;
+    border: 1px solid #ffffff0d;
+    border-radius: 8px;
+    background: #ffffff06;
+    color: #b7bac8;
+    font-size: 9px;
+}
+
+.task-metadata .priority-high {
+    border-color: #ff7f9130;
+    color: #ff9eab;
+}
+
+.task-metadata .priority-low {
+    color: #9da2b6;
+}
+
+.task-metadata .task-category {
+    color: #d3c4ff;
 }
 
 .task-content h3 {
@@ -672,7 +741,22 @@ button:disabled {
 }
 
 .habit-delete {
+    margin-left: 0;
+}
+
+.habit-card-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 6px;
     margin-left: auto;
+}
+
+.habit-edit {
+    min-height: 29px;
+    padding: 5px 8px;
+    border-radius: 9px;
+    font-size: 10px;
 }
 
 .habit-description {
@@ -688,6 +772,34 @@ button:disabled {
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 15px;
+}
+
+.habit-history-toggle {
+    min-height: 32px;
+    margin-top: 12px;
+    padding: 6px 10px;
+    border-radius: 9px;
+    font-size: 10px;
+}
+
+.habit-history {
+    display: grid;
+    gap: 5px;
+    margin: 8px 0 0;
+    padding: 0;
+    color: #b7bac8;
+    font-size: 11px;
+    list-style: none;
+}
+
+.habit-history[hidden] {
+    display: none;
+}
+
+.habit-history li {
+    padding: 7px 9px;
+    border-radius: 8px;
+    background: #ffffff06;
 }
 
 .habit-metric {

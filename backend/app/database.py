@@ -1,14 +1,30 @@
 
+import os
 import aiosqlite
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATABASE_PATH = PROJECT_ROOT / "taskflow.db"
+from backend.app.config import PROJECT_ROOT
+
+DATABASE_PATH = Path(
+    os.environ.get(
+        "TASKFLOW_DATABASE_PATH",
+        str(PROJECT_ROOT / "taskflow.db"),
+    )
+).expanduser()
+_timezone_name = os.environ.get("TASKFLOW_TIMEZONE")
+try:
+    APP_TIMEZONE = ZoneInfo(_timezone_name) if _timezone_name else None
+except ZoneInfoNotFoundError as error:
+    raise RuntimeError(
+        f"Unknown TASKFLOW_TIMEZONE: {_timezone_name}"
+    ) from error
 
 TEST_USER_ID = 1
 XP_PER_TASK = 10
 XP_PER_HABIT = 5
+DEFAULT_TASK_CATEGORY = "Общее"
 
 ACHIEVEMENTS = [
     {
@@ -43,11 +59,15 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 1,
                 title TEXT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
                 is_completed INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                xp_awarded INTEGER NOT NULL DEFAULT 0
+                xp_awarded INTEGER NOT NULL DEFAULT 0,
+                category TEXT NOT NULL DEFAULT 'Общее',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                deadline TEXT
             )
         """)
 
@@ -56,11 +76,17 @@ async def init_db():
 
         column_names = {column[1] for column in columns}
 
-        if "xp_awarded" not in column_names:
-            await db.execute("""
-                ALTER TABLE tasks
-                ADD COLUMN xp_awarded INTEGER NOT NULL DEFAULT 0
-            """)
+        for column_name, definition in {
+            "user_id": "INTEGER NOT NULL DEFAULT 1",
+            "xp_awarded": "INTEGER NOT NULL DEFAULT 0",
+            "category": "TEXT NOT NULL DEFAULT 'Общее'",
+            "priority": "TEXT NOT NULL DEFAULT 'medium'",
+            "deadline": "TEXT",
+        }.items():
+            if column_name not in column_names:
+                await db.execute(
+                    f"ALTER TABLE tasks ADD COLUMN {column_name} {definition}"
+                )
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS profiles (
@@ -121,56 +147,132 @@ async def init_db():
             VALUES (?, 0, 0)
         """, (TEST_USER_ID,))
 
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_user_status
+            ON tasks (user_id, is_completed)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_habits_user
+            ON habits (user_id)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_habit_completions_user_date
+            ON habit_completions (user_id, completed_date)
+        """)
         await db.commit()
 
 
-async def get_all_tasks():
+def today():
+    if APP_TIMEZONE is None:
+        return datetime.now().astimezone().date()
+    return datetime.now(APP_TIMEZONE).date()
+
+
+async def get_all_tasks(
+    user_id: int = TEST_USER_ID,
+    category: str | None = None,
+    status_filter: str = "all",
+    sort: str = "newest",
+):
+    order_by = {
+        "newest": "id DESC",
+        "oldest": "id ASC",
+        "deadline": "deadline IS NULL, deadline ASC, id DESC",
+        "priority": (
+            "CASE priority WHEN 'high' THEN 0 "
+            "WHEN 'medium' THEN 1 ELSE 2 END, id DESC"
+        ),
+    }[sort]
+    conditions = ["user_id = ?"]
+    parameters: list[object] = [user_id]
+    if category:
+        conditions.append("category = ?")
+        parameters.append(category)
+    if status_filter == "active":
+        conditions.append("is_completed = 0")
+    elif status_filter == "completed":
+        conditions.append("is_completed = 1")
+
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
 
-        async with db.execute("""
-            SELECT id, title, description, is_completed, created_at
+        async with db.execute(f"""
+            SELECT id, title, description, is_completed, created_at,
+                   category, priority, deadline
             FROM tasks
-            ORDER BY id DESC
-        """) as cursor:
+            WHERE {" AND ".join(conditions)}
+            ORDER BY {order_by}
+        """, parameters) as cursor:
             rows = await cursor.fetchall()
 
     return [dict(row) for row in rows]
 
 
-async def create_task(title: str, description: str = ""):
+async def create_task(
+    title: str,
+    description: str = "",
+    user_id: int = TEST_USER_ID,
+    category: str = DEFAULT_TASK_CATEGORY,
+    priority: str = "medium",
+    deadline: str | None = None,
+):
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO profiles (user_id) VALUES (?)",
+            (user_id,),
+        )
         cursor = await db.execute(
             """
-            INSERT INTO tasks (title, description)
-            VALUES (?, ?)
+            INSERT INTO tasks (
+                user_id, title, description, category, priority, deadline
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (title, description),
+            (user_id, title, description, category, priority, deadline),
         )
         await db.commit()
         return cursor.lastrowid
 
 
-async def get_task_by_id(task_id: int):
+async def get_task_by_id(task_id: int, user_id: int = TEST_USER_ID):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
 
         async with db.execute("""
-            SELECT id, title, description, is_completed, created_at
+            SELECT id, title, description, is_completed, created_at,
+                   category, priority, deadline
             FROM tasks
-            WHERE id = ?
-        """, (task_id,)) as cursor:
+            WHERE id = ? AND user_id = ?
+        """, (task_id, user_id)) as cursor:
             row = await cursor.fetchone()
 
     return dict(row) if row else None
 
 
-async def unlock_eligible_achievements(db):
+async def update_task(task_id: int, user_id: int, updates: dict):
+    if not updates:
+        return await get_task_by_id(task_id, user_id)
+
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    values = [*updates.values(), task_id, user_id]
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute(
+            f"UPDATE tasks SET {assignments} WHERE id = ? AND user_id = ?",
+            values,
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            return None
+
+    return await get_task_by_id(task_id, user_id)
+
+
+async def unlock_eligible_achievements(db, user_id: int = TEST_USER_ID):
     async with db.execute("""
         SELECT xp, completed_tasks
         FROM profiles
         WHERE user_id = ?
-    """, (TEST_USER_ID,)) as cursor:
+    """, (user_id,)) as cursor:
         profile = await cursor.fetchone()
 
     if profile is None:
@@ -191,19 +293,23 @@ async def unlock_eligible_achievements(db):
             await db.execute("""
                 INSERT OR IGNORE INTO achievements (user_id, code)
                 VALUES (?, ?)
-            """, (TEST_USER_ID, achievement["code"]))
+            """, (user_id, achievement["code"]))
 
 
-async def complete_task(task_id: int):
+async def complete_task(task_id: int, user_id: int = TEST_USER_ID):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
+        await db.execute(
+            "INSERT OR IGNORE INTO profiles (user_id) VALUES (?)",
+            (user_id,),
+        )
 
         async with db.execute("""
             SELECT is_completed, xp_awarded
             FROM tasks
-            WHERE id = ?
-        """, (task_id,)) as cursor:
+            WHERE id = ? AND user_id = ?
+        """, (task_id, user_id)) as cursor:
             task = await cursor.fetchone()
 
         if task is None:
@@ -214,14 +320,14 @@ async def complete_task(task_id: int):
             await db.execute("""
                 UPDATE tasks
                 SET is_completed = 0
-                WHERE id = ?
-            """, (task_id,))
+                WHERE id = ? AND user_id = ?
+            """, (task_id, user_id))
         else:
             await db.execute("""
                 UPDATE tasks
                 SET is_completed = 1
-                WHERE id = ?
-            """, (task_id,))
+                WHERE id = ? AND user_id = ?
+            """, (task_id, user_id))
 
             if not task["xp_awarded"]:
                 await db.execute("""
@@ -229,31 +335,31 @@ async def complete_task(task_id: int):
                     SET xp = xp + ?,
                         completed_tasks = completed_tasks + 1
                     WHERE user_id = ?
-                """, (XP_PER_TASK, TEST_USER_ID))
+                """, (XP_PER_TASK, user_id))
 
                 await db.execute("""
                     UPDATE tasks
                     SET xp_awarded = 1
-                    WHERE id = ?
-                """, (task_id,))
+                    WHERE id = ? AND user_id = ?
+                """, (task_id, user_id))
 
-                await unlock_eligible_achievements(db)
+                await unlock_eligible_achievements(db, user_id)
 
         await db.commit()
         return True
 
 
-async def delete_task(task_id: int):
+async def delete_task(task_id: int, user_id: int = TEST_USER_ID):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cursor = await db.execute(
-            "DELETE FROM tasks WHERE id = ?",
-            (task_id,),
+            "DELETE FROM tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
         )
         await db.commit()
         return cursor.rowcount > 0
 
 
-async def get_profile():
+async def get_profile(user_id: int = TEST_USER_ID):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
 
@@ -261,17 +367,17 @@ async def get_profile():
             SELECT user_id, xp, completed_tasks
             FROM profiles
             WHERE user_id = ?
-        """, (TEST_USER_ID,)) as cursor:
+        """, (user_id,)) as cursor:
             row = await cursor.fetchone()
 
     return dict(row) if row else {
-        "user_id": TEST_USER_ID,
+        "user_id": user_id,
         "xp": 0,
         "completed_tasks": 0,
     }
 
 
-async def get_achievements():
+async def get_achievements(user_id: int = TEST_USER_ID):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
 
@@ -279,7 +385,7 @@ async def get_achievements():
             SELECT code, unlocked_at
             FROM achievements
             WHERE user_id = ?
-        """, (TEST_USER_ID,)) as cursor:
+        """, (user_id,)) as cursor:
             rows = await cursor.fetchall()
 
     unlocked = {row["code"]: row["unlocked_at"] for row in rows}
@@ -296,7 +402,7 @@ async def get_achievements():
 
 def _habit_streak(completion_dates):
     completed = set(completion_dates)
-    current_day = date.today()
+    current_day = today()
 
     # Если привычка ещё не выполнена сегодня, серия может
     # продолжаться со вчерашнего дня.
@@ -312,8 +418,8 @@ def _habit_streak(completion_dates):
     return streak
 
 
-async def get_habits():
-    today = date.today().isoformat()
+async def get_habits(user_id: int = TEST_USER_ID):
+    current_day = today().isoformat()
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -334,7 +440,7 @@ async def get_habits():
             FROM habits h
             WHERE h.user_id = ?
             ORDER BY h.id DESC
-        """, (today, TEST_USER_ID)) as cursor:
+        """, (current_day, user_id)) as cursor:
             rows = await cursor.fetchall()
 
         habits = []
@@ -347,7 +453,7 @@ async def get_habits():
                 FROM habit_completions
                 WHERE habit_id = ? AND user_id = ?
                 ORDER BY completed_date DESC
-            """, (habit["id"], TEST_USER_ID)) as cursor:
+            """, (habit["id"], user_id)) as cursor:
                 completions = await cursor.fetchall()
 
             dates = [item["completed_date"] for item in completions]
@@ -360,21 +466,29 @@ async def get_habits():
     return habits
 
 
-async def create_habit(title: str, description: str = ""):
+async def create_habit(
+    title: str,
+    description: str = "",
+    user_id: int = TEST_USER_ID,
+):
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO profiles (user_id) VALUES (?)",
+            (user_id,),
+        )
         cursor = await db.execute("""
             INSERT INTO habits (user_id, title, description)
             VALUES (?, ?, ?)
-        """, (TEST_USER_ID, title, description))
+        """, (user_id, title, description))
 
         await db.commit()
         habit_id = cursor.lastrowid
 
-    return await get_habit_by_id(habit_id)
+    return await get_habit_by_id(habit_id, user_id)
 
 
-async def get_habit_by_id(habit_id: int):
-    habits = await get_habits()
+async def get_habit_by_id(habit_id: int, user_id: int = TEST_USER_ID):
+    habits = await get_habits(user_id)
 
     for habit in habits:
         if habit["id"] == habit_id:
@@ -383,18 +497,61 @@ async def get_habit_by_id(habit_id: int):
     return None
 
 
-async def complete_habit(habit_id: int):
-    today = date.today().isoformat()
+async def update_habit(habit_id: int, user_id: int, updates: dict):
+    if not updates:
+        return await get_habit_by_id(habit_id, user_id)
+
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute(
+            f"UPDATE habits SET {assignments} WHERE id = ? AND user_id = ?",
+            [*updates.values(), habit_id, user_id],
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            return None
+
+    return await get_habit_by_id(habit_id, user_id)
+
+
+async def get_habit_history(
+    habit_id: int,
+    user_id: int,
+    limit: int = 30,
+):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute("""
+            SELECT c.completed_date, c.xp_awarded
+            FROM habit_completions c
+            JOIN habits h ON h.id = c.habit_id
+            WHERE c.habit_id = ? AND c.user_id = ? AND h.user_id = ?
+            ORDER BY c.completed_date DESC
+            LIMIT ?
+        """, (habit_id, user_id, user_id, limit)) as cursor:
+            rows = await cursor.fetchall()
+
+    return [
+        {"completed_date": row[0], "xp_awarded": row[1]}
+        for row in rows
+    ]
+
+
+async def complete_habit(habit_id: int, user_id: int = TEST_USER_ID):
+    completion_date = today().isoformat()
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
+        await db.execute(
+            "INSERT OR IGNORE INTO profiles (user_id) VALUES (?)",
+            (user_id,),
+        )
 
         async with db.execute("""
             SELECT id
             FROM habits
             WHERE id = ? AND user_id = ?
-        """, (habit_id, TEST_USER_ID)) as cursor:
+        """, (habit_id, user_id)) as cursor:
             habit = await cursor.fetchone()
 
         if habit is None:
@@ -407,13 +564,13 @@ async def complete_habit(habit_id: int):
             WHERE habit_id = ?
               AND user_id = ?
               AND completed_date = ?
-        """, (habit_id, TEST_USER_ID, today)) as cursor:
+        """, (habit_id, user_id, completion_date)) as cursor:
             existing = await cursor.fetchone()
 
         if existing:
             await db.commit()
             return {
-                "habit": await get_habit_by_id(habit_id),
+                "habit": await get_habit_by_id(habit_id, user_id),
                 "xp_awarded_now": 0,
                 "already_completed": True,
             }
@@ -423,25 +580,25 @@ async def complete_habit(habit_id: int):
                 habit_id, user_id, completed_date, xp_awarded
             )
             VALUES (?, ?, ?, 1)
-        """, (habit_id, TEST_USER_ID, today))
+        """, (habit_id, user_id, completion_date))
 
         await db.execute("""
             UPDATE profiles
             SET xp = xp + ?
             WHERE user_id = ?
-        """, (XP_PER_HABIT, TEST_USER_ID))
+        """, (XP_PER_HABIT, user_id))
 
-        await unlock_eligible_achievements(db)
+        await unlock_eligible_achievements(db, user_id)
         await db.commit()
 
     return {
-        "habit": await get_habit_by_id(habit_id),
+        "habit": await get_habit_by_id(habit_id, user_id),
         "xp_awarded_now": XP_PER_HABIT,
         "already_completed": False,
     }
 
 
-async def delete_habit(habit_id: int):
+async def delete_habit(habit_id: int, user_id: int = TEST_USER_ID):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("BEGIN IMMEDIATE")
 
@@ -449,7 +606,7 @@ async def delete_habit(habit_id: int):
             SELECT id
             FROM habits
             WHERE id = ? AND user_id = ?
-        """, (habit_id, TEST_USER_ID)) as cursor:
+        """, (habit_id, user_id)) as cursor:
             habit = await cursor.fetchone()
 
         if habit is None:
@@ -459,12 +616,12 @@ async def delete_habit(habit_id: int):
         await db.execute("""
             DELETE FROM habit_completions
             WHERE habit_id = ? AND user_id = ?
-        """, (habit_id, TEST_USER_ID))
+        """, (habit_id, user_id))
 
         await db.execute("""
             DELETE FROM habits
             WHERE id = ? AND user_id = ?
-        """, (habit_id, TEST_USER_ID))
+        """, (habit_id, user_id))
 
         await db.commit()
         return True
